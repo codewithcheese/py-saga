@@ -1,5 +1,5 @@
 # saga_py/effects.py
-from typing import TypeVar, Generic, AsyncGenerator, Any
+from typing import TypeVar, Generic, AsyncGenerator, Any, Callable
 from dataclasses import dataclass
 from enum import Enum
 
@@ -13,9 +13,14 @@ class Effect(Generic[T]):
 
 @dataclass
 class Call(Effect[T]):
-    fn: Any
+    fn: Callable
     args: tuple = ()
     kwargs: dict = None
+
+    def __init__(self, fn: Callable, *args, **kwargs):
+        self.fn = fn
+        self.args = args
+        self.kwargs = kwargs if kwargs else None
 
 
 @dataclass
@@ -29,7 +34,7 @@ class Take(Effect[dict]):
 
 
 @dataclass
-class Select(Effect[T]):
+class Select(Effect[Any]):
     selector: callable = None
 
 
@@ -46,5 +51,3 @@ class All(Effect[list]):
 @dataclass
 class Race(Effect[dict]):
     effects: dict[str, Effect]
-
-

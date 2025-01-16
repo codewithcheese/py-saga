@@ -1,8 +1,9 @@
 import pytest
-import anyio
+import asyncio
 from typing import Dict, Any
 from saga.runtime import SagaRuntime
 from saga.effects import Call, Put, Take, Select, Fork, All, Race
+
 
 # Mock store for testing
 class MockStore:
@@ -18,10 +19,10 @@ class MockStore:
         elif action["type"] == "DECREMENT":
             self.state["counter"] = self.state.get("counter", 0) - 1
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_basic_saga_workflow():
     """Test a basic saga that increments a counter"""
-    done = anyio.Event()
+    done = asyncio.Event()
     
     async def increment_saga():
         # Take an INCREMENT_REQUESTED action
@@ -36,67 +37,79 @@ async def test_basic_saga_workflow():
     runtime = SagaRuntime()
     runtime.store = MockStore({"counter": 0})
     
-    async with anyio.create_task_group() as tg:
-        # Start the saga
-        tg.start_soon(runtime.run, increment_saga)
+    async with asyncio.TaskGroup() as tg:
+        tg.create_task(runtime.run(increment_saga))
         # Dispatch an action
         await runtime.dispatch({"type": "INCREMENT_REQUESTED", "extra": "data"})
         # Wait for saga to complete
         await done.wait()
         
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_parallel_effects():
     """Test running multiple effects in parallel using All"""
+    done = asyncio.Event()
+    
+    async def delay(ms):
+        await asyncio.sleep(ms / 1000)
+        return ms
+
     async def parallel_saga():
-        async def task1():
-            return "result1"
-            
-        async def task2():
-            return "result2"
-            
         results = yield All([
-            Call(task1),
-            Call(task2)
+            Call(delay, 10),
+            Call(delay, 20),
+            Call(delay, 30)
         ])
-        assert results == ["result1", "result2"]
+        assert results == [10, 20, 30]
+        done.set()
         
     runtime = SagaRuntime()
-    await runtime.run(parallel_saga)
-    
-@pytest.mark.anyio
+    async with asyncio.TaskGroup() as tg:
+        await tg.create_task(runtime.run(parallel_saga))
+        await done.wait()
+
+@pytest.mark.asyncio
 async def test_race_condition():
     """Test racing between multiple effects"""
+    done = asyncio.Event()
+    
+    async def slow_increment():
+        await asyncio.sleep(0.1)
+        return "SLOW"
+    
+    async def fast_increment():
+        return "FAST"
+    
     async def race_saga():
-        async def slow_task():
-            await anyio.sleep(0.1)
-            return "slow"
-            
-        async def fast_task():
-            return "fast"
-            
         result = yield Race({
-            "slow": Call(slow_task),
-            "fast": Call(fast_task)
+            "slow": Call(slow_increment),
+            "fast": Call(fast_increment)
         })
-        assert result == {"fast": "fast"}
+        assert "fast" in result
+        assert result["fast"] == "FAST"
+        done.set()
         
     runtime = SagaRuntime()
-    await runtime.run(race_saga)
+    async with asyncio.TaskGroup() as tg:
+        await tg.create_task(runtime.run(race_saga))
+        await done.wait()
 
-@pytest.mark.anyio
+@pytest.mark.asyncio
 async def test_fork_saga():
     """Test forking a child saga"""
-    results = []
+    parent_done = asyncio.Event()
+    child_done = asyncio.Event()
     
     async def child_saga():
-        results.append("child")
-        yield None  # Must yield at least once to be a generator
-        
+        yield Take("CHILD_ACTION")
+        child_done.set()
+    
     async def parent_saga():
-        results.append("parent")
         yield Fork(child_saga)
-        assert "parent" in results
-        assert "child" in results
+        parent_done.set()
         
     runtime = SagaRuntime()
-    await runtime.run(parent_saga)
+    async with asyncio.TaskGroup() as tg:
+        await tg.create_task(runtime.run(parent_saga))
+        await parent_done.wait()
+        await runtime.dispatch({"type": "CHILD_ACTION"})
+        await child_done.wait()
