@@ -1,22 +1,17 @@
 from anyio import create_task_group, create_memory_object_stream, Event, CancelScope
-from typing import AsyncGenerator, Dict, Any, Callable
+from typing import AsyncGenerator, Dict, Any, Callable, List
 from saga.effects import *
 
 
 class SagaRuntime:
     def __init__(self):
         self.store = None
-        self.action_stream = None
+        self._action_sender, self._action_receiver = create_memory_object_stream[Dict](100)
         self.error_handlers = []
         self._running_sagas = set()
 
     async def run(self, saga: Callable[..., AsyncGenerator], *args, **kwargs):
         """Run a saga generator function."""
-        if self.action_stream is None:
-            sender, receiver = create_memory_object_stream[Dict](100)
-            self.action_stream = receiver
-            self._action_sender = sender
-
         async with create_task_group() as tg:
             await tg.start(self._run_saga, saga, args, kwargs)
 
@@ -24,14 +19,11 @@ class SagaRuntime:
         """Run a saga generator function and handle its effects."""
         try:
             gen = saga_fn(*args)  # Don't pass kwargs to saga functions
+            result = None
             while True:
                 try:
-                    effect = await gen.__anext__()
+                    effect = await gen.asend(result)
                     result = await self._handle_effect(effect)
-                    try:
-                        await gen.asend(result)
-                    except StopAsyncIteration:
-                        break
                 except StopAsyncIteration:
                     break
         except Exception as e:
@@ -39,14 +31,16 @@ class SagaRuntime:
         if task_status is not None:
             task_status.started()
 
-    async def _handle_effect(self, effect: Effect) -> Any:
+    async def _handle_effect(self, effect: Effect, task_status=None) -> Any:
+        if task_status is not None:
+            task_status.started()
         """Handle a saga effect."""
         match effect:
             case Call(fn, args, kwargs):
                 return await fn(*args, **(kwargs or {}))
 
             case Put(action):
-                await self._action_sender.send(action)
+                await self.dispatch(action)
                 return action
 
             case Take(pattern):
@@ -62,52 +56,59 @@ class SagaRuntime:
                 return None
 
             case All(effects):
+                results = [None] * len(effects)  # Pre-allocate list with correct size
+
+                async def wrapper(_effect, idx):
+                    result = await self._handle_effect(_effect)
+                    results[idx] = result
+
                 async with create_task_group() as tg:
-                    results = []
-                    for effect in effects:
-                        results.append(
-                            await tg.start(self._handle_effect, effect)
-                        )
-                    return results
+                    for idx, effect in enumerate(effects):
+                        tg.start_soon(wrapper, effect, idx)
+
+                return results
 
             case Race(effects):
                 return await self._handle_race(effects)
 
-    async def _take(self, pattern: str) -> Dict:
-        """Wait for an action matching the pattern."""
+    async def dispatch(self, action: Dict[str, Any]) -> None:
+        """Dispatch an action to the store and action stream."""
+        if self.store:
+            self.store.dispatch(action)
+        await self._action_sender.send(action)
+
+    async def _take(self, pattern: str = None) -> Dict[str, Any]:
+        """Take an action from the action stream that matches the pattern."""
         while True:
-            action = await self.action_stream.receive()
-            if isinstance(pattern, str) and action["type"] == pattern:
-                return action
-            elif callable(pattern) and pattern(action):
+            action = await self._action_receiver.receive()
+            if pattern is None or action["type"] == pattern:
                 return action
 
     async def _handle_race(self, effects: Dict[str, Effect]) -> Dict[str, Any]:
         """Handle racing between multiple effects."""
         done = Event()
-        results = {}
+        result = {}
 
         async def run_effect(key: str, effect: Effect, *, task_status=None):
+            if task_status is not None:
+                task_status.started()
             try:
                 with CancelScope() as scope:
-                    result = await self._handle_effect(effect)
+                    value = await self._handle_effect(effect)
                     if not done.is_set():
-                        results[key] = result
+                        result[key] = value
                         done.set()
-                        scope.cancel()  # Cancel other tasks
             except Exception as e:
                 if not done.is_set():
                     await self._handle_error(e)
                     done.set()
-            if task_status is not None:
-                task_status.started()
 
         async with create_task_group() as tg:
             for key, effect in effects.items():
-                await tg.start(run_effect, key, effect)
+                tg.start_soon(run_effect, key, effect)
             await done.wait()
 
-        return results
+        return result
 
     async def _handle_error(self, error: Exception):
         """Handle errors in sagas."""

@@ -21,23 +21,28 @@ class MockStore:
 @pytest.mark.anyio
 async def test_basic_saga_workflow():
     """Test a basic saga that increments a counter"""
+    done = anyio.Event()
+    
     async def increment_saga():
         # Take an INCREMENT_REQUESTED action
-        action = yield Take("INCREMENT_REQUESTED")
+        yield Take("INCREMENT_REQUESTED")
         # Put an INCREMENT action
         yield Put({"type": "INCREMENT"})
         # Select the current state
         state = yield Select(lambda s: s["counter"])
         assert state == 1
+        done.set()
         
     runtime = SagaRuntime()
     runtime.store = MockStore({"counter": 0})
     
     async with anyio.create_task_group() as tg:
         # Start the saga
-        await tg.start(runtime.run, increment_saga)
+        tg.start_soon(runtime.run, increment_saga)
         # Dispatch an action
-        await runtime.action_stream.send({"type": "INCREMENT_REQUESTED"})
+        await runtime.dispatch({"type": "INCREMENT_REQUESTED", "extra": "data"})
+        # Wait for saga to complete
+        await done.wait()
         
 @pytest.mark.anyio
 async def test_parallel_effects():
