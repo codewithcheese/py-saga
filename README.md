@@ -1,8 +1,8 @@
-# py_saga
+# py-saga
 
 A modern Python implementation of the Redux-Saga pattern, leveraging Python's native features for elegant task orchestration.
 
-## Why py_saga?
+## Why py-saga?
 
 py_saga brings the power of Redux-Saga to Python, but with a distinctly Pythonic feel:
 
@@ -53,6 +53,8 @@ async def process_order_saga():
 - **Type Safety**: Full type hints and runtime type checking
 
 ## Installation
+
+NOT YET RELEASED
 
 ```bash
 pip install py-saga
