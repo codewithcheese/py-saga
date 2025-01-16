@@ -1,4 +1,5 @@
 from typing import Dict, Any
+from .actions import Action
 
 class Store:
     """Simple store for state management."""
@@ -9,6 +10,6 @@ class Store:
     def get_state(self) -> Dict[str, Any]:
         return self.state
 
-    def dispatch(self, action: Dict[str, Any]) -> Dict[str, Any]:
+    def dispatch(self, action: Action) -> Action:
         """Process an action. Override this method to implement state updates."""
         return action

@@ -1,6 +1,6 @@
-from typing import TypeVar, Generic, AsyncGenerator, Any, Callable
+from typing import TypeVar, Generic, AsyncGenerator, Any, Type, Union
 from dataclasses import dataclass
-from enum import Enum
+from .actions import Action
 
 T = TypeVar('T')
 
@@ -12,11 +12,11 @@ class Effect(Generic[T]):
 
 @dataclass
 class Call(Effect[T]):
-    fn: Callable
+    fn: Any
     args: tuple = ()
     kwargs: dict = None
 
-    def __init__(self, fn: Callable, *args, **kwargs):
+    def __init__(self, fn: Any, *args, **kwargs):
         self.fn = fn
         self.args = args
         self.kwargs = kwargs if kwargs else None
@@ -24,12 +24,12 @@ class Call(Effect[T]):
 
 @dataclass
 class Put(Effect[None]):
-    action: dict
+    action: Action
 
 
 @dataclass
-class Take(Effect[dict]):
-    pattern: str
+class Take(Effect[Action]):
+    pattern: Union[str, Type[Action]]  # Can be string for backward compatibility or action class
 
 
 @dataclass

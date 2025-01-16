@@ -4,17 +4,24 @@ from typing import Dict, Any
 from saga.runtime import SagaRuntime
 from saga.effects import Call, Put, Take, Select, Fork, All, Race
 from saga.store import Store
+from saga.actions import Action, Increment, Decrement
+from dataclasses import dataclass
 
 # Mock store for testing
+@dataclass
+class IncrementRequested(Action):
+    pass
+
 class MockStore(Store):
     def __init__(self, state=None):
         self.state = state if state else {}
 
-    def dispatch(self, action: Dict[str, Any]) -> Dict[str, Any]:
-        if action["type"] == "INCREMENT":
-            self.state["counter"] = self.state.get("counter", 0) + 1
-        elif action["type"] == "DECREMENT":
-            self.state["counter"] = self.state.get("counter", 0) - 1
+    def dispatch(self, action: Action) -> Action:
+        match action:
+            case Increment(amount=amount):
+                self.state["counter"] = self.state.get("counter", 0) + amount
+            case Decrement(amount=amount):
+                self.state["counter"] = self.state.get("counter", 0) - amount
         return action
 
 @pytest.mark.asyncio
@@ -24,9 +31,9 @@ async def test_basic_saga_workflow():
     
     async def increment_saga():
         # Take an INCREMENT_REQUESTED action
-        yield Take("INCREMENT_REQUESTED")
+        yield Take(IncrementRequested)
         # Put an INCREMENT action
-        yield Put({"type": "INCREMENT"})
+        yield Put(Increment(amount=1))
         # Select the current state
         state = yield Select(lambda s: s["counter"])
         assert state == 1
@@ -38,7 +45,7 @@ async def test_basic_saga_workflow():
     async with asyncio.TaskGroup() as tg:
         tg.create_task(runtime.run(increment_saga))
         # Dispatch an action
-        await runtime.dispatch({"type": "INCREMENT_REQUESTED", "extra": "data"})
+        await runtime.dispatch(IncrementRequested())
         # Wait for saga to complete
         await done.wait()
         
@@ -91,23 +98,37 @@ async def test_race_condition():
         tg.create_task(runtime.run(race_saga))
         await done.wait()
 
+@dataclass
+class StartFork(Action):
+    pass
+
+@dataclass
+class ForkStarted(Action):
+    pass
+
+@dataclass
+class ForkCompleted(Action):
+    pass
+
 @pytest.mark.asyncio
 async def test_fork_saga():
-    """Test forking a child saga"""
-    parent_done = asyncio.Event()
-    child_done = asyncio.Event()
+    """Test forking a saga"""
+    done = asyncio.Event()
     
     async def child_saga():
-        yield Take("CHILD_ACTION")
-        child_done.set()
+        yield Put(ForkStarted())
+        yield Put(ForkCompleted())
     
     async def parent_saga():
+        yield Take(StartFork)
         yield Fork(child_saga)
-        parent_done.set()
-        
-    runtime = SagaRuntime()  # No store needed for Fork and Take effects
+        yield Take(ForkCompleted)
+        done.set()
+    
+    store = MockStore()
+    runtime = SagaRuntime(store)
+    
     async with asyncio.TaskGroup() as tg:
         tg.create_task(runtime.run(parent_saga))
-        await parent_done.wait()
-        await runtime.dispatch({"type": "CHILD_ACTION"})
-        await child_done.wait()
+        await runtime.dispatch(StartFork())
+        await done.wait()
