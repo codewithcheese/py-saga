@@ -1,4 +1,3 @@
-# saga_py/effects.py
 from typing import TypeVar, Generic, AsyncGenerator, Any, Callable
 from dataclasses import dataclass
 from enum import Enum

@@ -5,8 +5,9 @@ from saga.effects import *
 
 
 class SagaRuntime:
-    def __init__(self):
-        self.store = None
+    
+    def __init__(self, store = None):
+        self.store = store
         self._action_queue = Queue[Dict](maxsize=100)
         self.error_handlers = []
         self._running_sagas = set()
@@ -45,11 +46,14 @@ class SagaRuntime:
             await self._handle_error(e)
 
     async def _handle_effect(self, effect: Effect) -> Any:
+        """Handle different types of effects."""
         match effect:
             case Call(fn, args, kwargs):
                 return await fn(*args, **(kwargs or {}))
 
             case Put(action):
+                if not self.store:
+                    raise RuntimeError("Cannot use Put effect without a store")
                 await self.dispatch(action)
                 return action
 
@@ -57,6 +61,8 @@ class SagaRuntime:
                 return await self._take(pattern)
 
             case Select(selector):
+                if not self.store:
+                    raise RuntimeError("Cannot use Select effect without a store")
                 state = self.store.get_state()
                 return selector(state) if selector else state
 
@@ -81,6 +87,9 @@ class SagaRuntime:
 
             case Race(effects):
                 return await self._handle_race(effects)
+
+            case _:
+                raise ValueError(f"Unknown effect type: {effect}")
 
     async def _handle_race(self, effects: Dict[str, Effect]) -> Dict[str, Any]:
         """Handle racing between multiple effects."""

@@ -1,15 +1,14 @@
-from saga.runtime import SagaRuntime
-
+from typing import Dict, Any
 
 class Store:
-    def __init__(self):
-        self.saga_runtime = SagaRuntime()
-        self.state = {}
+    """Simple store for state management."""
+    
+    def __init__(self, initial_state: Dict[str, Any] = None):
+        self.state = initial_state or {}
 
-    async def run_saga(self, saga, *args, **kwargs):
-        await self.saga_runtime.run(saga, *args, **kwargs)
+    def get_state(self) -> Dict[str, Any]:
+        return self.state
 
-    async def dispatch(self, action):
-        self.state = self.reducer(self.state, action)
-        await self.saga_runtime.action_stream.send(action)
-
+    def dispatch(self, action: Dict[str, Any]) -> Dict[str, Any]:
+        """Process an action. Override this method to implement state updates."""
+        return action
